@@ -302,7 +302,6 @@ function mergeStateDatabase(newRows, rowMap, other) {
 		var key = keyFromRow(otherRow);
 		if (rowMap.has(key))
 			return;
-		console.log(key);
 		var newRow = {
 			councillor: otherRow.councillor || otherRow.name,
 			position: otherRow.position,
