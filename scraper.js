@@ -43,27 +43,10 @@ function updateAll(db, all, callback) {
 		if (result == "email") {
 			db.run("UPDATE data SET email = ? WHERE rowid = ?",
 				   row.email, i + 1);
-			console.log("Added email for " + row.councillor +
-				        " (" + row.council_name + "): " + row.email);
-		} else if (result == "no-matching-email") {
-			// There were no emails that contained the councillors name.
-			// These don't ever seem to be correct, so mark them as "none".
-			db.run("UPDATE data SET email = ? WHERE rowid = ?", "none", i + 1);
-			console.log("No matching email for " + row.councillor +
-				        " (" + row.council_name + "), closest was: " +
-				        row.email);
 		} else if (result == "no-email-found") {
 			// None of the search results contained an email address.
 			// Unfortunately, this is quite common.
 			db.run("UPDATE data SET email = ? WHERE rowid = ?", "none", i + 1);
-			console.log("No email for " + row.councillor +
-				        " (" + row.council_name + ")");
-		} else if (result == "existing-email") {
-			// Ignore.
-		} else {
-			// Log any other errors.
-			console.log(result + " for " + row.councillor +
-				        " (" + row.council_name + ")");
 		}
 	}
 	callback();
@@ -98,9 +81,11 @@ function matchEmails(text) {
 }
 
 function containsAny(haystack, list) {
-	return list.filter(function (item) {
-		return haystack.indexOf(item) != -1;
-	}).length;
+	for (var i in list) {
+		if (haystack.indexOf(list[i]) != -1)
+			return true;
+	}
+	return false;
 }
 
 function trimUrl(url) {
@@ -163,45 +148,47 @@ function fetchDatabase(scraper, callback) {
 	});
 }
 
+function scheduleGetEmailsInResult(results, index, emails, finalCallback) {
+	setImmediate(function () {
+		getEmailsInResult(results, index, emails, finalCallback);
+	});
+}
+
 // Get the emails from a single result page. Calls itself for the next result
 // page when done. Calls |finalCallback| when all result pages are done.
-function getEmailsInResultPage(results, index, emails, finalCallback) {
+function getEmailsInResult(results, index, emails, finalCallback) {
 	if (index == results.length || index >= MAX_SEARCH_RESULTS) {
 		finalCallback(emails);
 		return;
 	}
 
 	fetchPage(results[index].url, function (html) {
-		emails.push.apply(emails, matchEmails(html));
-		setImmediate(function () {
-			getEmailsInResultPage(results, index + 1, emails, finalCallback);
-		});
+		var emailsInResult = matchEmails(html);
+		for (e in emailsInResult)
+			emails[emailsInResult[e]] = true;
+		scheduleGetEmailsInResult(results, index + 1, emails, finalCallback);
 	});
 }
 
 // For a set of google search results, pull all emails from the snippets and
 // from the full text content of each result page.
 function getEmailsFromSearch(results, callback) {
-	var emails = [];
+	var emails = {};
 	for (r in results) {
-		emails.push.apply(emails, matchEmails(
-			htmlToText("<body>" + results[r].content + "</body>")));
+		var emailsInSnippet = matchEmails(
+			htmlToText("<body>" + results[r].content + "</body>"));
+		for (e in emailsInSnippet)
+			emails[emailsInSnippet[e]] = true;
 	}
-	getEmailsInResultPage(results, 0, emails, callback);
+	getEmailsInResult(results, 0, emails, callback);
 }
 
 // Return a tuple containing the result and the email with the closest
 // Levenshtein distance to the name. Ignores case. This only considers emails
-// that contain at least the first or last name.
+// that contain at least the first or last name. This is a good signal that the
+// email is correct.
 function getBestEmail(name, emails) {
 	var nameLower = name.trim().toLowerCase();
-	var emailsByDistance = emails.map(function (email) {
-		var user = email.toLowerCase().match(USER_REGEX).toString();
-		var lev = new levenshtein(nameLower, user);
-		return [lev.distance, email, user];
-	});
-	emailsByDistance.sort();
-
 	var firstOrLast = [];
 	var first = nameLower.match(FIRST_REGEX);
 	if (first)
@@ -209,14 +196,23 @@ function getBestEmail(name, emails) {
 	var last = nameLower.match(LAST_REGEX);
 	if (last)
 		firstOrLast.push(last.toString());
-	var matchingEmails = emailsByDistance.filter(function (levAndEmail) {
-		return containsAny(levAndEmail[2], firstOrLast);
-	});
-	if (matchingEmails.length > 0) {
-		return ["email", matchingEmails[0][1]];
-	} else if (emailsByDistance.length > 0) {
-		return ["no-matching-email", emailsByDistance[0][1]];
+
+	var best = "";
+	var bestDistance = 100000;
+	for (email in emails) {
+		if (!containsAny(email, firstOrLast))
+			continue;
+
+		var user = email.toLowerCase().match(USER_REGEX).toString();
+		var distance = new levenshtein(nameLower, user).distance;
+		if (distance < bestDistance) {
+			best = email;
+			bestDistance = distance;
+		}
 	}
+
+	if (best)
+		return ["email", best];
 
 	return ["no-email-found", ""];
 }
@@ -245,47 +241,71 @@ function getEmail(row, callback) {
 	});
 }
 
-// Get the email for each row, up to |MAX_SEARCHES_PER_RUN|. Ignores rows that
-// already have an email. Calls |callback| when finished, or |nothingToDo| if
-// there was no work to do.
-function findEmails(rows, callback, nothingToDo) {
-	var getEmailCount = 0;
-	var first;
-	var last;
-	rows.forEach(function (row, index) {
-		if (getEmailCount >= MAX_SEARCHES_PER_RUN)
-			return;
-		if (row.email) {
-			row.result = "existing-email";
-			return;
-		}
-		if (!row.councillor) {
-			row.result = "no-councillor-name";
-			return;
-		}
-		if (!row.council_website) {
-			row.result = "no-council-website";
-			return;
-		}
-		getEmailCount++;
-		if (first === undefined)
-			first = index;
-		last = index;
-		setImmediate(function () {
-			getEmail(row, function () {
-				getEmailCount--;
-				if (getEmailCount == 0)
-					callback();
-			});
-		});
+function printResult(row) {
+	var result = row.result;
+	if (result == "email") {
+		console.log("Found email for " + row.councillor +
+			        " (" + row.council_name + "): " + row.email);
+	} else if (result == "no-email-found") {
+		console.log("No email for " + row.councillor +
+			        " (" + row.council_name + ")");
+	} else if (result == "existing-email") {
+		// Ignore.
+	} else {
+		// Log any other errors.
+		console.log(result + " for " + row.councillor +
+			        " (" + row.council_name + ")");
+	}
+}
+
+function scheduleFindEmailForRow(rows, index, getEmailCount, finalCallback) {
+	setImmediate(function () {
+		findEmailForRow(rows, index, getEmailCount, finalCallback);
 	});
-	if (getEmailCount > 0) {
-		console.log("Getting emails for " + getEmailCount + " rows between " +
-			        first + " and " + last + ".");
+}
+
+function findEmailForRow(rows, index, getEmailCount, finalCallback) {
+	var row = rows[index];
+	var next = function () {
+		printResult(row);
+		if (row.result == "no-search-results" ||
+			getEmailCount == MAX_SEARCHES_PER_RUN ||
+			index + 1 == rows.length) {
+			finalCallback();
+			return;
+		}
+
+		scheduleFindEmailForRow(rows, index + 1, getEmailCount, finalCallback);
+	};
+	if (row.email) {
+		row.result = "existing-email";
+		next();
 		return;
 	}
-	console.log("No rows to process.");
-	nothingToDo();
+	if (!row.councillor) {
+		row.result = "no-councillor-name";
+		next();
+		return;
+	}
+	if (!row.council_website) {
+		row.result = "no-council-website";
+		next();
+		return;
+	}
+	getEmailCount++;
+	getEmail(row, next);
+}
+
+// Get the email for each row. Ignores rows that already have an email. Calls
+// |callback| when finished, or |nothingToDo| if there was no work to do.
+function findEmails(rows, callback, nothingToDo) {
+	var getEmailCount = 0;
+	findEmailForRow(rows, 0, getEmailCount, function () {
+		if (getEmailCount > 0)
+			callback();
+		else
+			nothingToDo();
+	});
 }
 
 function keyFromRow(row) {
