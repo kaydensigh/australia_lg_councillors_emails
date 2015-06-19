@@ -7,11 +7,11 @@ var levenshtein = require("levenshtein");
 var request = require("request");
 var sqlite3 = require("sqlite3").verbose();
 
-var EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,4}/g;
+var EMAIL_REGEX = /[a-zA-Z0-9._%+-]{1,50}@[a-zA-Z0-9.-]{1,50}\.[a-z]{2,4}/g;
 var USER_REGEX = /^[a-zA-Z0-9._%+-]+/;
 var FIRST_REGEX = /^[a-z]+/;
 var LAST_REGEX = /[a-z]+$/;
-var MAX_SEARCH_RESULTS = 10;
+var MAX_SEARCH_RESULTS = 8;
 var MAX_SEARCHES_PER_RUN = 200;
 
 function initDatabase(callback) {
@@ -95,8 +95,11 @@ function googleSearch(query, callback) {
 	var options = {
 		url: "https://ajax.googleapis.com/ajax/services/search/web",
 		qs: {
-			v: "1.0",
-			q: query
+			v: "1.0",  // Mandatory.
+			q: query,
+			rsz: MAX_SEARCH_RESULTS,
+			filter: "1",  // Enables duplicate filter (doesn't seem to work).
+			gl: "au",  // Specify country.
 		},
 		headers: {
 			"Referer": "http://www.oaf.org.au"
@@ -161,6 +164,12 @@ function getEmailsInResult(results, index, emails, finalCallback) {
 		return;
 	}
 
+	// Ignore anything that has a file format. It's usually PDF.
+	// TODO: Improve this to handle anything that might have an email.
+	if (results[r].fileFormat) {
+		scheduleGetEmailsInResult(results, index + 1, emails, finalCallback);
+		return;
+	}
 	fetchPage(results[index].url, function (html) {
 		var emailsInResult = matchEmails(html);
 		for (e in emailsInResult)
@@ -257,7 +266,8 @@ function printResult(row, results) {
 	}
 }
 
-function scheduleFindEmailForRow(rows, results, index, getEmailCount, finalCallback) {
+function scheduleFindEmailForRow(
+		rows, results, index, getEmailCount, finalCallback) {
 	setImmediate(function () {
 		findEmailForRow(rows, results, index, getEmailCount, finalCallback);
 	});
@@ -274,7 +284,8 @@ function findEmailForRow(rows, results, index, getEmailCount, finalCallback) {
 			return;
 		}
 
-		scheduleFindEmailForRow(rows, results, index + 1, getEmailCount, finalCallback);
+		scheduleFindEmailForRow(
+			rows, results, index + 1, getEmailCount, finalCallback);
 	};
 	if (row.email) {
 		results[keyFromRow(row)] = "existing-email";
