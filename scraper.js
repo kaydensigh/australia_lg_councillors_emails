@@ -31,11 +31,11 @@ function initDatabase(callback) {
 // Update any rows that have results. If no email is found, the email field is
 // set to "none" so that we don't try it again. The field is left blank if there
 // was an error.
-function updateAll(db, all, callback) {
+function updateAll(db, rows, results, callback) {
 	console.log("Writing new email results to database.");
-	for (var i = 0; i < all.length; i++) {
-		var row = all[i];
-		var result = row.result;
+	for (var i = 0; i < rows.length; i++) {
+		var row = rows[i];
+		var result = results[keyFromRow(row)];
 		if (!result)
 			continue;
 
@@ -218,30 +218,30 @@ function getBestEmail(name, emails) {
 
 // Get the email for a particular row. This does a web search constrained to
 // the council's website and considers all emails in the top few search results.
-function getEmail(row, callback) {
+function getEmail(row, results, callback) {
 	googleSearch(row.councillor + " site:" + trimUrl(row.council_website),
 		         function (result) {
 		if (!result) {
-			row.result = "error-during-search";
+			results[keyFromRow(row)] = "error-during-search";
 			callback();
 			return;
 		}
 		if (!result.responseData || !result.responseData.results) {
-			row.result = "no-search-results";
+			results[keyFromRow(row)] = "no-search-results";
 			callback();
 			return;
 		}
 		getEmailsFromSearch(result.responseData.results, function (emails) {
 			var result = getBestEmail(row.councillor, emails);
 			row.email = result[1];
-			row.result = result[0];
+			results[keyFromRow(row)] = result[0];
 			callback();
 		});
 	});
 }
 
-function printResult(row) {
-	var result = row.result;
+function printResult(row, results) {
+	var result = results[keyFromRow(row)];
 	if (result == "email") {
 		console.log("Found email for " + row.councillor +
 			        " (" + row.council_name + "): " + row.email);
@@ -257,49 +257,49 @@ function printResult(row) {
 	}
 }
 
-function scheduleFindEmailForRow(rows, index, getEmailCount, finalCallback) {
+function scheduleFindEmailForRow(rows, results, index, getEmailCount, finalCallback) {
 	setImmediate(function () {
-		findEmailForRow(rows, index, getEmailCount, finalCallback);
+		findEmailForRow(rows, results, index, getEmailCount, finalCallback);
 	});
 }
 
-function findEmailForRow(rows, index, getEmailCount, finalCallback) {
+function findEmailForRow(rows, results, index, getEmailCount, finalCallback) {
 	var row = rows[index];
 	var next = function () {
-		printResult(row);
-		if (row.result == "no-search-results" ||
+		printResult(row, results);
+		if (results[keyFromRow(row)] == "no-search-results" ||
 			getEmailCount == MAX_SEARCHES_PER_RUN ||
 			index + 1 == rows.length) {
 			finalCallback();
 			return;
 		}
 
-		scheduleFindEmailForRow(rows, index + 1, getEmailCount, finalCallback);
+		scheduleFindEmailForRow(rows, results, index + 1, getEmailCount, finalCallback);
 	};
 	if (row.email) {
-		row.result = "existing-email";
+		results[keyFromRow(row)] = "existing-email";
 		next();
 		return;
 	}
 	if (!row.councillor) {
-		row.result = "no-councillor-name";
+		results[keyFromRow(row)] = "no-councillor-name";
 		next();
 		return;
 	}
 	if (!row.council_website) {
-		row.result = "no-council-website";
+		results[keyFromRow(row)] = "no-council-website";
 		next();
 		return;
 	}
 	getEmailCount++;
-	getEmail(row, next);
+	getEmail(row, results, next);
 }
 
 // Get the email for each row. Ignores rows that already have an email. Calls
 // |callback| when finished, or |nothingToDo| if there was no work to do.
-function findEmails(rows, callback, nothingToDo) {
+function findEmails(rows, results, callback, nothingToDo) {
 	var getEmailCount = 0;
-	findEmailForRow(rows, 0, getEmailCount, function () {
+	findEmailForRow(rows, results, 0, getEmailCount, function () {
 		if (getEmailCount > 0)
 			callback();
 		else
@@ -369,10 +369,11 @@ function run() {
 	initDatabase(function (db) {
 		var closeDatabase = function () { db.close(); };
 		readAll(db, function (rows) {
+			var results = new hashtable();
 			// Do a normal search run. If there was nothing to do, pull new rows
 			// from the state databases.
-			findEmails(rows, function () {
-				updateAll(db, rows, closeDatabase);
+			findEmails(rows, results, function () {
+				updateAll(db, rows, results, closeDatabase);
 			}, function () {
 				var newRows = [];
 				fetchAndMergeStateDatabases(rows, newRows, function () {
