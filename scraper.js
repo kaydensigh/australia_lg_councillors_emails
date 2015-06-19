@@ -2,7 +2,6 @@
 // MORPH_API_KEY: API key used to fetch state databases.
 // MORPH_STATE_DATABASES: comma-delimited list of scraper names.
 
-var cheerio = require("cheerio");
 var hashtable = require("hashtable");
 var levenshtein = require("levenshtein");
 var request = require("request");
@@ -71,9 +70,9 @@ function readAll(db, callback) {
     });
 }
 
-function htmlToText(html) {
-	var $ = cheerio.load(html);
-	return $("body").text();
+function snippetToText(snippet) {
+	// Remove <b> tags.
+	return snippet.replace("<b>", "").replace("</b>", "");
 }
 
 function matchEmails(text) {
@@ -176,7 +175,7 @@ function getEmailsFromSearch(results, callback) {
 	var emails = {};
 	for (r in results) {
 		var emailsInSnippet = matchEmails(
-			htmlToText("<body>" + results[r].content + "</body>"));
+			snippetToText("<body>" + results[r].content + "</body>"));
 		for (e in emailsInSnippet)
 			emails[emailsInSnippet[e]] = true;
 	}

@@ -1,6 +1,5 @@
 {
 	"dependencies": {
-		"cheerio": "latest",
 		"hashtable": "latest",
 		"levenshtein": "latest",
 		"request": "latest",
