@@ -2,6 +2,8 @@
 // MORPH_API_KEY: API key used to fetch state databases.
 // MORPH_STATE_DATABASES: comma-delimited list of scraper names.
 
+"use strict";
+
 var hashtable = require("hashtable");
 var levenshtein = require("levenshtein");
 var request = require("request");
@@ -11,8 +13,8 @@ var EMAIL_REGEX = /[a-zA-Z0-9._%+-]{1,50}@[a-zA-Z0-9.-]{1,50}\.[a-z]{2,4}/g;
 var USER_REGEX = /^[a-zA-Z0-9._%+-]+/;
 var FIRST_REGEX = /^[a-z]+/;
 var LAST_REGEX = /[a-z]+$/;
-var MAX_SEARCH_RESULTS = 8;
-var MAX_SEARCHES_PER_RUN = 200;
+var MAX_SEARCH_RESULTS = 4;
+var MAX_SEARCHES_PER_RUN = 100;
 
 function initDatabase(callback) {
 	var db = new sqlite3.Database("data.sqlite");
@@ -102,7 +104,8 @@ function googleSearch(query, callback) {
 			gl: "au",  // Specify country.
 		},
 		headers: {
-			"Referer": "http://www.oaf.org.au"
+			"User-Agent": "nodejs request",
+			"Referer": "http://www.oaf.org.au",
 		}
 	};
 	request(options, function (error, response, body) {
@@ -166,13 +169,13 @@ function getEmailsInResult(results, index, emails, finalCallback) {
 
 	// Ignore anything that has a file format. It's usually PDF.
 	// TODO: Improve this to handle anything that might have an email.
-	if (results[r].fileFormat) {
+	if (results[index].fileFormat) {
 		scheduleGetEmailsInResult(results, index + 1, emails, finalCallback);
 		return;
 	}
 	fetchPage(results[index].url, function (html) {
 		var emailsInResult = matchEmails(html);
-		for (e in emailsInResult)
+		for (var e in emailsInResult)
 			emails[emailsInResult[e]] = true;
 		scheduleGetEmailsInResult(results, index + 1, emails, finalCallback);
 	});
@@ -182,10 +185,10 @@ function getEmailsInResult(results, index, emails, finalCallback) {
 // from the full text content of each result page.
 function getEmailsFromSearch(results, callback) {
 	var emails = {};
-	for (r in results) {
+	for (var r in results) {
 		var emailsInSnippet = matchEmails(
 			snippetToText("<body>" + results[r].content + "</body>"));
-		for (e in emailsInSnippet)
+		for (var e in emailsInSnippet)
 			emails[emailsInSnippet[e]] = true;
 	}
 	getEmailsInResult(results, 0, emails, callback);
@@ -207,7 +210,7 @@ function getBestEmail(name, emails) {
 
 	var best = "";
 	var bestDistance = 100000;
-	for (email in emails) {
+	for (var email in emails) {
 		if (!containsAny(email, firstOrLast))
 			continue;
 
@@ -266,26 +269,24 @@ function printResult(row, results) {
 	}
 }
 
-function scheduleFindEmailForRow(
-		rows, results, index, getEmailCount, finalCallback) {
+function scheduleFindEmailForRow(rows, results, index, count, finalCallback) {
 	setImmediate(function () {
-		findEmailForRow(rows, results, index, getEmailCount, finalCallback);
+		findEmailForRow(rows, results, index, count, finalCallback);
 	});
 }
 
-function findEmailForRow(rows, results, index, getEmailCount, finalCallback) {
+function findEmailForRow(rows, results, index, count, finalCallback) {
 	var row = rows[index];
 	var next = function () {
 		printResult(row, results);
 		if (results[keyFromRow(row)] == "no-search-results" ||
-			getEmailCount == MAX_SEARCHES_PER_RUN ||
+			count == MAX_SEARCHES_PER_RUN ||
 			index + 1 == rows.length) {
-			finalCallback();
+			finalCallback(count);
 			return;
 		}
 
-		scheduleFindEmailForRow(
-			rows, results, index + 1, getEmailCount, finalCallback);
+		scheduleFindEmailForRow(rows, results, index + 1, count, finalCallback);
 	};
 	if (row.email) {
 		results[keyFromRow(row)] = "existing-email";
@@ -302,19 +303,20 @@ function findEmailForRow(rows, results, index, getEmailCount, finalCallback) {
 		next();
 		return;
 	}
-	getEmailCount++;
+	count++;
 	getEmail(row, results, next);
 }
 
 // Get the email for each row. Ignores rows that already have an email. Calls
 // |callback| when finished, or |nothingToDo| if there was no work to do.
 function findEmails(rows, results, callback, nothingToDo) {
-	var getEmailCount = 0;
-	findEmailForRow(rows, results, 0, getEmailCount, function () {
-		if (getEmailCount > 0)
+	findEmailForRow(rows, results, 0, 0, function (count) {
+		if (count > 0) {
+			console.log("Processed " + count + " rows.");
 			callback();
-		else
+		} else {
 			nothingToDo();
+		}
 	});
 }
 
@@ -378,7 +380,11 @@ function fetchAndMergeStateDatabases(rows, newRows, callback) {
 
 function run() {
 	initDatabase(function (db) {
-		var closeDatabase = function () { db.close(); };
+		var closeDatabase = function () {
+			console.log("Writing database to disk.");
+			db.close();
+			console.log("Finished.");
+		};
 		readAll(db, function (rows) {
 			var results = new hashtable();
 			// Do a normal search run. If there was nothing to do, pull new rows
