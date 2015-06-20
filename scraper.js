@@ -25,7 +25,8 @@ function initDatabase(callback) {
          'council_name TEXT, ' +
          'ward TEXT, ' +
          'council_website TEXT, ' +
-         'email TEXT)');
+         'email TEXT, ' +
+         'UNIQUE (councillor, council_name))');
     callback(db);
   });
 }
@@ -35,21 +36,29 @@ function initDatabase(callback) {
 // was an error.
 function updateAll(db, rows, results, callback) {
   console.log('Writing new email results to database.');
+  var totalEmails = 0;
+  var totalNone = 0;
+  var statement = db.prepare('REPLACE INTO data VALUES (?, ?, ?, ?, ?, ?)');
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    var result = results[keyFromRow(row)];
-    if (!result)
-      continue;
+    if (row.email) {
+      if (row.email == 'none')
+        totalNone++;
+      else
+        totalEmails++;
+    }
 
-    if (result == 'email') {
-      db.run('UPDATE data SET email = ? WHERE rowid = ?',
-           row.email, i + 1);
-    } else if (result == 'no-email-found') {
-      // None of the search results contained an email address.
-      // Unfortunately, this is quite common.
-      db.run('UPDATE data SET email = ? WHERE rowid = ?', 'none', i + 1);
+    var result = results.get(keyFromRow(row));
+    if (result && (result == 'email' || result == 'no-email-found')) {
+      statement.run([row.councillor, row.position, row.council_name, row.ward,
+               row.council_website, row.email]);
     }
   }
+  statement.finalize();
+  var totalUnprocessed = rows.length - totalEmails - totalNone;
+  console.log('Database summary: ' + totalEmails + ' with emails, ' +
+              totalNone + ' without emails, ' +
+              totalUnprocessed + ' unprocessed.');
   callback();
 }
 
@@ -209,7 +218,10 @@ function getBestEmail(name, emails) {
   if (best)
     return ['email', best];
 
-  return ['no-email-found', ''];
+  // None of the search results contained an email address.
+  // Unfortunately, this is quite common. Set the email to 'none' so we don't
+  // process this row again.
+  return ['no-email-found', 'none'];
 }
 
 // Get the email for a particular row. This does a web search constrained to
@@ -218,26 +230,26 @@ function getEmail(row, results, callback) {
   googleSearch(row.councillor + ' site:' + trimUrl(row.council_website),
              function(result) {
     if (!result) {
-      results[keyFromRow(row)] = 'error-during-search';
+      results.put(keyFromRow(row), 'error-during-search');
       callback();
       return;
     }
     if (!result.responseData || !result.responseData.results) {
-      results[keyFromRow(row)] = 'no-search-results';
+      results.put(keyFromRow(row), 'no-search-results');
       callback();
       return;
     }
     getEmailsFromSearch(result.responseData.results, function(emails) {
       var result = getBestEmail(row.councillor, emails);
       row.email = result[1];
-      results[keyFromRow(row)] = result[0];
+      results.put(keyFromRow(row), result[0]);
       callback();
     });
   });
 }
 
 function printResult(row, results) {
-  var result = results[keyFromRow(row)];
+  var result = results.get(keyFromRow(row));
   if (result == 'email') {
     console.log('Found email for ' + row.councillor +
               ' (' + row.council_name + '): ' + row.email);
@@ -267,7 +279,7 @@ function findEmailForRow(rows, results, index, count, finalCallback) {
   var row = rows[index];
   var next = function() {
     printResult(row, results);
-    if (results[keyFromRow(row)] == 'no-search-results' ||
+    if (results.get(keyFromRow(row)) == 'no-search-results' ||
       count == MAX_SEARCHES_PER_RUN ||
       index + 1 == rows.length) {
       finalCallback(count);
@@ -277,17 +289,17 @@ function findEmailForRow(rows, results, index, count, finalCallback) {
     scheduleFindEmailForRow(rows, results, index + 1, count, finalCallback);
   };
   if (row.email) {
-    results[keyFromRow(row)] = 'existing-email';
+    results.put(keyFromRow(row), 'existing-email');
     next();
     return;
   }
   if (!row.councillor) {
-    results[keyFromRow(row)] = 'no-councillor-name';
+    results.put(keyFromRow(row), 'no-councillor-name');
     next();
     return;
   }
   if (!row.council_website) {
-    results[keyFromRow(row)] = 'no-council-website';
+    results.put(keyFromRow(row), 'no-council-website');
     next();
     return;
   }
