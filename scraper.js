@@ -8,6 +8,7 @@ var child_process = require('child_process');
 var hashtable = require("hashtable");
 var levenshtein = require("levenshtein");
 var sqlite3 = require("sqlite3").verbose();
+var util = require('util');
 
 var EMAIL_REGEX = /[a-zA-Z0-9._%+-]{1,50}@[a-zA-Z0-9.-]{1,50}\.[a-z]{2,4}/g;
 var USER_REGEX = /^[a-zA-Z0-9._%+-]+/;
@@ -370,7 +371,8 @@ function run() {
 		var closeDatabase = function () {
 			console.log("Writing database to disk.");
 			db.close();
-			console.log("Finished.");
+			console.log("Finished. Memory usage:",
+						util.inspect(process.memoryUsage()));
 		};
 		readAll(db, function (rows) {
 			var results = new hashtable();
