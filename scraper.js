@@ -399,6 +399,9 @@ function run() {
 			});
 		};
 		readAll(db, function (rows) {
+			var mem = (process.memoryUsage().rss / (1 << 20)).toFixed(2);
+			console.log("Read database (" + rows.length + " rows). " +
+						"Current memory usage: " + mem + " MB");
 			var results = new hashtable();
 			// Do a normal search run. If there was nothing to do, pull new rows
 			// from the state databases.
