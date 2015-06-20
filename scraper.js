@@ -95,49 +95,46 @@ function trimUrl(url) {
 
 function googleSearch(query, callback) {
   var url = 'https://ajax.googleapis.com/ajax/services/search/web?v=1.0&q=' +
-    encodeURIComponent(query);
-  var child = child_process.exec(
-    "curl -v -e http://www.oaf.org.au '" + url + "'",
-    function(error, stdout, stderr) {
-      if (error !== null) {
-        console.log('Error making google query: ' + error + '/n' +
-              stderr + '/n');
-        callback(null);
-      }
-      callback(JSON.parse(stdout));
-    });
+            encodeURIComponent(query);
+  var result = child_process.spawnSync(
+    'curl', ['-v', '-e', 'http://www.oaf.org.au', url]);
+  if (result.status) {
+    console.log('Error making google query: ', result.error);
+    console.log(result.stderr.toString());
+    callback(null);
+    return;
+  }
+  callback(JSON.parse(result.stdout));
 }
 
 function fetchPage(url, callback) {
   // The default stdout buffer size is 200 * 1024, so we're effectively
   // ignoring pages larger than that.
-  var child = child_process.exec(
-    "curl -v -e http://www.oaf.org.au '" + url + "'",
-    function(error, stdout, stderr) {
-      if (error !== null) {
-        console.log('Error requesting page: ' + error + '/n' +
-              stderr + '/n');
-        callback('');
-      }
-      callback(stdout);
-    });
+  var result = child_process.spawnSync(
+    'curl', ['-v', '-e', 'http://www.oaf.org.au', url]);
+  if (result.status) {
+    // These happen often, just log the url and move on.
+    console.log('Error requesting page: ', url);
+    callback('');
+    return;
+  }
+  callback(result.stdout.toString());
 }
 
 function fetchDatabase(scraper, callback) {
   var url = 'https://api.morph.io/' + scraper + '/data.json?' +
       'key=' + encodeURIComponent(process.env.MORPH_API_KEY) + '&' +
       'query=' + encodeURIComponent('SELECT * FROM data');
-  var child = child_process.exec(
-    "curl -v -e http://www.oaf.org.au '" + url + "'",
-    { maxBuffer: 500 * 1024 },
-    function(error, stdout, stderr) {
-      if (error !== null) {
-        console.log('Error fetching database: ' + error + '/n' +
-              stderr + '/n');
-        callback(null);
-      }
-      callback(JSON.parse(stdout));
-    });
+  var result = child_process.spawnSync(
+    'curl', ['-v', '-e', 'http://www.oaf.org.au', url],
+    { maxBuffer: 500 * 1024 });
+  if (result.status) {
+    console.log('Error fetching database: ', result.error);
+    console.log(result.stderr.toString());
+    callback(null);
+    return;
+  }
+  callback(JSON.parse(result.stdout));
 }
 
 function scheduleGetEmailsInResult(results, index, emails, finalCallback) {
