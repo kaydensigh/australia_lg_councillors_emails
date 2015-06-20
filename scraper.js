@@ -263,6 +263,10 @@ function scheduleFindEmailForRow(rows, results, index, count, finalCallback) {
 }
 
 function findEmailForRow(rows, results, index, count, finalCallback) {
+	if (index >= rows.length) {
+		finalCallback();
+		return;
+	}
 	var row = rows[index];
 	var next = function () {
 		printResult(row, results);
@@ -389,10 +393,10 @@ function run() {
 	initDatabase(function (db) {
 		var closeDatabase = function () {
 			console.log("Writing database to disk.");
-			db.close();
-			console.log("Finished. Memory usage: " +
-						(process.memoryUsage().rss / (1 << 20)).toFixed(2) +
-						" MB");
+			db.close(function () {
+				var mem = (process.memoryUsage().rss / (1 << 20)).toFixed(2);
+				console.log("Finished. Memory usage: " + mem + " MB");
+			});
 		};
 		readAll(db, function (rows) {
 			var results = new hashtable();
