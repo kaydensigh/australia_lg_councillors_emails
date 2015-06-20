@@ -8,7 +8,6 @@ var child_process = require('child_process');
 var hashtable = require("hashtable");
 var levenshtein = require("levenshtein");
 var sqlite3 = require("sqlite3").verbose();
-var util = require('util');
 
 var EMAIL_REGEX = /[a-zA-Z0-9._%+-]{1,50}@[a-zA-Z0-9.-]{1,50}\.[a-z]{2,4}/g;
 var USER_REGEX = /^[a-zA-Z0-9._%+-]+/;
@@ -110,6 +109,8 @@ function googleSearch(query, callback) {
 }
 
 function fetchPage(url, callback) {
+	// The default stdout buffer size is 200 * 1024, so we're effectively
+	// ignoring pages larger than that.
 	var child = child_process.exec(
 		"curl -v -e http://www.oaf.org.au '" + url + "'",
 		function (error, stdout, stderr) {
@@ -123,22 +124,20 @@ function fetchPage(url, callback) {
 }
 
 function fetchDatabase(scraper, callback) {
-	var options = {
-		url: "https://api.morph.io/" + scraper + "/data.json",
-		qs: {
-			key: process.env.MORPH_API_KEY,
-			query: "SELECT * FROM data"
-		}
-	};
-	request(options, function (error, response, body) {
-		if (error) {
-			console.log("Error fetching database: " + error);
-			callback(null);
-			return;
-		}
-
-		callback(JSON.parse(body));
-	});
+	var url = "https://api.morph.io/" + scraper + "/data.json?" +
+			"key=" + encodeURIComponent(process.env.MORPH_API_KEY) + "&" +
+			"query=" + encodeURIComponent("SELECT * FROM data");
+	var child = child_process.exec(
+		"curl -v -e http://www.oaf.org.au '" + url + "'",
+		{ maxBuffer: 500 * 1024 },
+		function (error, stdout, stderr) {
+			if (error !== null) {
+				console.log("Error fetching database: " + error + "/n" +
+							stderr + "/n");
+				callback(null);
+			}
+			callback(JSON.parse(stdout));
+		});
 }
 
 function scheduleGetEmailsInResult(results, index, emails, finalCallback) {
@@ -179,7 +178,7 @@ function getEmailsFromSearch(results, callback) {
 		for (var e in emailsInSnippet)
 			emails[emailsInSnippet[e]] = true;
 	}
-	getEmailsInResult(results, 0, emails, callback);
+	scheduleGetEmailsInResult(results, 0, emails, callback);
 }
 
 // Return a tuple containing the result and the email with the closest
@@ -298,7 +297,7 @@ function findEmailForRow(rows, results, index, count, finalCallback) {
 // Get the email for each row. Ignores rows that already have an email. Calls
 // |callback| when finished, or |nothingToDo| if there was no work to do.
 function findEmails(rows, results, callback, nothingToDo) {
-	findEmailForRow(rows, results, 0, 0, function (count) {
+	scheduleFindEmailForRow(rows, results, 0, 0, function (count) {
 		if (count > 0) {
 			console.log("Processed " + count + " rows.");
 			callback();
@@ -337,33 +336,53 @@ function mergeStateDatabase(newRows, rowMap, other) {
 	console.log("Added " + total + " new rows.");
 }
 
+function scheduleFetchStateDatabase(
+		stateDatabases, index, newRows, rowMap, finalCallback) {
+	setImmediate(function () {
+		fetchStateDatabase(
+			stateDatabases, index, newRows, rowMap, finalCallback);
+	});
+}
+
+function fetchStateDatabase(
+		stateDatabases, index, newRows, rowMap, finalCallback) {
+	if (index == stateDatabases.length) {
+		finalCallback();
+		return;
+	}
+	var state = stateDatabases[index];
+	fetchDatabase(state, function (data) {
+		if (data) {
+			console.log("Merging " + data.length + " rows from: " + state);
+			mergeStateDatabase(newRows, rowMap, data);
+		}
+		scheduleFetchStateDatabase(
+			stateDatabases, index + 1, newRows, rowMap, finalCallback);
+	});
+}
+
 // Get all state databases listed in |MORPH_STATE_DATABASES| and add any new
 // rows to our database.
 function fetchAndMergeStateDatabases(rows, newRows, callback) {
+	if (!process.env.MORPH_STATE_DATABASES || !process.env.MORPH_API_KEY) {
+		console.log("Missing environment variable MORPH_STATE_DATABASES " +
+					"and/or MORPH_API_KEY.");
+		callback();
+		return;
+	}
+
 	// Put our database into a hash map for quick lookup.
 	var rowMap = new hashtable();
 	rows.forEach(function (row) {
 		rowMap.put(keyFromRow(row), row);
 	});
 
-	var fetchDatabaseCount = 0;
 	var stateDatabases =
 		process.env.MORPH_STATE_DATABASES.split(",").filter(function (repo) {
 			return repo.match(/^[A-Za-z0-9_\-\/]+$/);
 		});
 	console.log("Fetching state databases: ", stateDatabases);
-	stateDatabases.forEach(function (state) {
-		fetchDatabaseCount++;
-		setImmediate(function () {
-			fetchDatabase(state, function (data) {
-				fetchDatabaseCount--;
-				console.log("Merging from: " + state);
-				mergeStateDatabase(newRows, rowMap, data);
-				if (fetchDatabaseCount == 0)
-					callback();
-			});
-		});
-	});
+	scheduleFetchStateDatabase(stateDatabases, 0, newRows, rowMap, callback);
 }
 
 function run() {
@@ -371,8 +390,9 @@ function run() {
 		var closeDatabase = function () {
 			console.log("Writing database to disk.");
 			db.close();
-			console.log("Finished. Memory usage:",
-						util.inspect(process.memoryUsage()));
+			console.log("Finished. Memory usage: " +
+						(process.memoryUsage().rss / (1 << 20)).toFixed(2) +
+						" MB");
 		};
 		readAll(db, function (rows) {
 			var results = new hashtable();
