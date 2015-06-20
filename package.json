@@ -2,7 +2,6 @@
 	"dependencies": {
 		"hashtable": "latest",
 		"levenshtein": "latest",
-		"request": "latest",
 		"sqlite3": "latest"
 	}
 }

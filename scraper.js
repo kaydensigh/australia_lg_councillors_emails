@@ -4,9 +4,9 @@
 
 "use strict";
 
+var child_process = require('child_process');
 var hashtable = require("hashtable");
 var levenshtein = require("levenshtein");
-var request = require("request");
 var sqlite3 = require("sqlite3").verbose();
 
 var EMAIL_REGEX = /[a-zA-Z0-9._%+-]{1,50}@[a-zA-Z0-9.-]{1,50}\.[a-z]{2,4}/g;
@@ -94,44 +94,31 @@ function trimUrl(url) {
 }
 
 function googleSearch(query, callback) {
-	var options = {
-		url: "https://ajax.googleapis.com/ajax/services/search/web",
-		qs: {
-			v: "1.0",  // Mandatory.
-			q: query,
-			rsz: MAX_SEARCH_RESULTS,
-			filter: "1",  // Enables duplicate filter (doesn't seem to work).
-			gl: "au",  // Specify country.
-		},
-		headers: {
-			"User-Agent": "nodejs request",
-			"Referer": "http://www.oaf.org.au",
-		}
-	};
-	request(options, function (error, response, body) {
-		if (error) {
-			console.log("Error making google query: " + error);
-			callback(null);
-			return;
-		}
-
-		callback(JSON.parse(body));
-	});
+	var url = "https://ajax.googleapis.com/ajax/services/search/web?v=1.0&q=" +
+		encodeURIComponent(query);
+	var child = child_process.exec(
+		"curl -v -e http://www.oaf.org.au '" + url + "'",
+		function (error, stdout, stderr) {
+			if (error !== null) {
+				console.log("Error making google query: " + error + "/n" +
+							stderr + "/n");
+				callback(null);
+			}
+			callback(JSON.parse(stdout));
+		});
 }
 
 function fetchPage(url, callback) {
-	// Use request to read in pages.
-	request(url, function (error, response, body) {
-		if (error) {
-			console.log("Error requesting page: " + error);
-			callback("");
-			return;
-		}
-
-		// Don't process the html with cheerio, it can cause a stack overflow.
-		// Just matching match emails in the raw HTML should be mostly fine.
-		callback(body);
-	});
+	var child = child_process.exec(
+		"curl -v -e http://www.oaf.org.au '" + url + "'",
+		function (error, stdout, stderr) {
+			if (error !== null) {
+				console.log("Error requesting page: " + error + "/n" +
+							stderr + "/n");
+				callback("");
+			}
+			callback(stdout);
+		});
 }
 
 function fetchDatabase(scraper, callback) {
