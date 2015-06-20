@@ -14,7 +14,7 @@ var USER_REGEX = /^[a-zA-Z0-9._%+-]+/;
 var FIRST_REGEX = /^[a-z]+/;
 var LAST_REGEX = /[a-z]+$/;
 var MAX_SEARCH_RESULTS = 4;
-var MAX_SEARCHES_PER_RUN = 100;
+var MAX_SEARCHES_PER_RUN = process.env.MORPH_MAX_SEARCHES_PER_RUN || 100;
 
 function initDatabase(callback) {
   var db = new sqlite3.Database('data.sqlite');
